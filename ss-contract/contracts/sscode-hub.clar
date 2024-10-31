@@ -21,8 +21,15 @@
   { balance: uint }
 )
 
+(define-map orders
+  { order-id: uint }
+  { token-id: uint, amount: uint, price: uint, seller: principal, order-type: (string-ascii 4) }
+)
+
 ;; Variables
 (define-data-var last-token-id uint u0)
+(define-data-var last-order-id uint u0)
+
 
 ;; Private Functions
 (define-private (validate-token-id (token-id uint))
@@ -48,6 +55,13 @@
   (default-to 
     { balance: u0 }
     (map-get? balances { token-id: token-id, owner: owner })
+  )
+)
+
+(define-read-only (get-order (order-id uint))
+  (match (map-get? orders { order-id: order-id })
+    entry (ok entry)
+    (err err-order-not-found)
   )
 )
 
@@ -92,5 +106,42 @@
     )
     (var-set last-token-id new-token-id)
     (ok new-token-id)
+  )
+)
+(define-public (create-sell-order (token-id uint) (amount uint) (price uint))
+  (let
+    (
+      (seller-balance (get balance (get-balance token-id tx-sender)))
+      (new-order-id (+ (var-get last-order-id) u1))
+    )
+    (asserts! (validate-token-id token-id) err-invalid-token)
+    (asserts! (>= seller-balance amount) err-insufficient-balance)
+    (asserts! (> amount u0) err-invalid-amount)
+    (asserts! (> price u0) err-invalid-price)
+    (map-set orders
+      { order-id: new-order-id }
+      { token-id: token-id, amount: amount, price: price, seller: tx-sender, order-type: "sell" }
+    )
+    (var-set last-order-id new-order-id)
+    (ok new-order-id)
+  )
+)
+
+(define-public (create-buy-order (token-id uint) (amount uint) (price uint))
+  (let
+    (
+      (new-order-id (+ (var-get last-order-id) u1))
+      (total-cost (* amount price))
+    )
+    (asserts! (validate-token-id token-id) err-invalid-token)
+    (asserts! (> amount u0) err-invalid-amount)
+    (asserts! (> price u0) err-invalid-price)
+    (asserts! (>= (stx-get-balance tx-sender) total-cost) err-insufficient-balance)
+    (map-set orders
+      { order-id: new-order-id }
+      { token-id: token-id, amount: amount, price: price, seller: tx-sender, order-type: "buy" }
+    )
+    (var-set last-order-id new-order-id)
+    (ok new-order-id)
   )
 )

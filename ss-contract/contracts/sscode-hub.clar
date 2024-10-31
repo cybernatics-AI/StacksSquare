@@ -1,6 +1,6 @@
 ;; Title: Social Token Marketplace
-;; Version: 0.1
-;; Description: Basic token implementation with core functionality
+;; Version: 0.4
+;; Description: Added order execution functionality
 
 ;; Constants
 (define-constant contract-owner tx-sender)
@@ -8,6 +8,10 @@
 (define-constant err-not-token-owner (err u101))
 (define-constant err-insufficient-balance (err u102))
 (define-constant err-invalid-token (err u103))
+(define-constant err-invalid-amount (err u104))
+(define-constant err-invalid-price (err u105))
+(define-constant err-order-not-found (err u106))
+(define-constant err-not-authorized (err u108))
 (define-constant err-invalid-recipient (err u111))
 
 ;; Data Maps
@@ -30,7 +34,6 @@
 (define-data-var last-token-id uint u0)
 (define-data-var last-order-id uint u0)
 
-
 ;; Private Functions
 (define-private (validate-token-id (token-id uint))
   (is-some (map-get? tokens { token-id: token-id }))
@@ -41,6 +44,10 @@
     (not (is-eq recipient tx-sender))
     (not (is-eq recipient contract-owner))
   )
+)
+
+(define-private (validate-order-id (order-id uint))
+  (is-some (map-get? orders { order-id: order-id }))
 )
 
 ;; Read-Only Functions
@@ -65,7 +72,27 @@
   )
 )
 
-;; Added Transfer Function
+;; Public Functions
+(define-public (create-token (name (string-ascii 32)) (symbol (string-ascii 10)) (initial-supply uint))
+  (let
+    (
+      (new-token-id (+ (var-get last-token-id) u1))
+    )
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (asserts! (> initial-supply u0) err-invalid-amount)
+    (map-set tokens
+      { token-id: new-token-id }
+      { name: name, symbol: symbol, total-supply: initial-supply, owner: tx-sender }
+    )
+    (map-set balances
+      { token-id: new-token-id, owner: tx-sender }
+      { balance: initial-supply }
+    )
+    (var-set last-token-id new-token-id)
+    (ok new-token-id)
+  )
+)
+
 (define-public (transfer (token-id uint) (amount uint) (sender principal) (recipient principal))
   (let
     (
@@ -88,26 +115,6 @@
   )
 )
 
-;; Public Functions
-(define-public (create-token (name (string-ascii 32)) (symbol (string-ascii 10)) (initial-supply uint))
-  (let
-    (
-      (new-token-id (+ (var-get last-token-id) u1))
-    )
-    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
-    (asserts! (> initial-supply u0) err-invalid-amount)
-    (map-set tokens
-      { token-id: new-token-id }
-      { name: name, symbol: symbol, total-supply: initial-supply, owner: tx-sender }
-    )
-    (map-set balances
-      { token-id: new-token-id, owner: tx-sender }
-      { balance: initial-supply }
-    )
-    (var-set last-token-id new-token-id)
-    (ok new-token-id)
-  )
-)
 (define-public (create-sell-order (token-id uint) (amount uint) (price uint))
   (let
     (
@@ -143,5 +150,53 @@
     )
     (var-set last-order-id new-order-id)
     (ok new-order-id)
+  )
+)
+
+(define-public (execute-order (order-id uint))
+  (let
+    (
+      (order (unwrap! (map-get? orders { order-id: order-id }) err-order-not-found))
+      (token-id (get token-id order))
+      (amount (get amount order))
+      (price (get price order))
+      (seller (get seller order))
+      (order-type (get order-type order))
+    )
+    (asserts! (validate-order-id order-id) err-order-not-found)
+    (if (is-eq order-type "sell")
+      (execute-sell-order order-id token-id amount price seller tx-sender)
+      (execute-buy-order order-id token-id amount price seller tx-sender)
+    )
+  )
+)
+
+(define-private (execute-sell-order (order-id uint) (token-id uint) (amount uint) (price uint) (seller principal) (buyer principal))
+  (let
+    (
+      (total-cost (* amount price))
+    )
+    (asserts! (validate-token-id token-id) err-invalid-token)
+    (asserts! (validate-order-id order-id) err-order-not-found)
+    (asserts! (>= (stx-get-balance buyer) total-cost) err-insufficient-balance)
+    (try! (stx-transfer? total-cost buyer seller))
+    (try! (transfer token-id amount seller buyer))
+    (map-delete orders { order-id: order-id })
+    (ok true)
+  )
+)
+
+(define-private (execute-buy-order (order-id uint) (token-id uint) (amount uint) (price uint) (buyer principal) (seller principal))
+  (let
+    (
+      (total-cost (* amount price))
+    )
+    (asserts! (validate-token-id token-id) err-invalid-token)
+    (asserts! (validate-order-id order-id) err-order-not-found)
+    (asserts! (>= (get balance (get-balance token-id seller)) amount) err-insufficient-balance)
+    (try! (stx-transfer? total-cost buyer seller))
+    (try! (transfer token-id amount seller buyer))
+    (map-delete orders { order-id: order-id })
+    (ok true)
   )
 )

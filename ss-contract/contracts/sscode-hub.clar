@@ -200,3 +200,54 @@
     (ok true)
   )
 )
+
+(define-map liquidity-pools
+  { token-id: uint }
+  { total-liquidity: uint, price: uint }
+)
+
+(define-read-only (get-liquidity-pool (token-id uint))
+  (default-to
+    { total-liquidity: u0, price: u0 }
+    (map-get? liquidity-pools { token-id: token-id })
+  )
+)
+
+(define-public (add-liquidity (token-id uint) (amount uint))
+  (let
+    (
+      (token (unwrap! (map-get? tokens { token-id: token-id }) err-invalid-token))
+      (current-pool (get-liquidity-pool token-id))
+      (current-liquidity (get total-liquidity current-pool))
+      (current-price (get price current-pool))
+    )
+    (asserts! (validate-token-id token-id) err-invalid-token)
+    (asserts! (> amount u0) err-invalid-amount)
+    (asserts! (>= (get balance (get-balance token-id tx-sender)) amount) err-insufficient-balance)
+    (map-set liquidity-pools
+      { token-id: token-id }
+      { total-liquidity: (+ current-liquidity amount), price: (calculate-new-price current-price current-liquidity amount true) }
+    )
+    (map-set balances
+      { token-id: token-id, owner: tx-sender }
+      { balance: (- (get balance (get-balance token-id tx-sender)) amount) }
+    )
+    (ok true)
+  )
+)
+
+(define-private (calculate-new-price (current-price uint) (current-liquidity uint) (liquidity-change uint) (is-adding bool))
+  (let
+    (
+      (new-liquidity (if is-adding
+                        (+ current-liquidity liquidity-change)
+                        (if (> current-liquidity liquidity-change)
+                            (- current-liquidity liquidity-change)
+                            u0)))
+    )
+    (if (> new-liquidity u0)
+      (/ (* current-price current-liquidity) new-liquidity)
+      u0
+    )
+  )
+)
